@@ -1,0 +1,38 @@
+server:
+  port: ":8082"
+  environment: "local"
+  security:
+    rateLimit:
+      qps: 100
+    cors:
+      allowedOrigins:
+        - "http://localhost:3000"
+        - "http://127.0.0.1:3000"
+        - "http://localhost:5173"
+        - "http://127.0.0.1:5173"
+    csrf:
+      enabled: false
+
+service:
+  name: "api-gateway"
+
+log:
+  level: "debug"
+  format: "json"
+
+newrelic:
+  enabled: false
+  appName: "api-gateway"
+  licenseKey: ""
+  distributedTracer: true
+
+notification:
+  slack:
+    webhookURL: ""
+    errorChannelID: ""
+
+google:
+  clientID: ""
+
+downstream:
+  baseURL: "http://localhost:8080"
