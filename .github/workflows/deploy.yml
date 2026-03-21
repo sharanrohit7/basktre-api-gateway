@@ -106,7 +106,7 @@ jobs:
 
             echo "→ Running health check..."
             for i in $(seq 1 5); do
-              if curl -sf http://localhost:8082/health > /dev/null; then
+              if curl -sf http://localhost:3000/health > /dev/null; then
                 echo "✓ Health check passed — deploy successful"
                 rm -f "$APP_DIR/server.bak"
                 SUCCESS=true
@@ -118,7 +118,7 @@ jobs:
 
             if [ "$SUCCESS" = false ]; then
               echo "✗ Health check failed — rolling back"
-              cp "$APP_DIR/server.bak" "$APP_DIR/server" || true
+              mv "$APP_DIR/server.bak" "$APP_DIR/server" || true
               sudo systemctl restart basktre-api-gateway
               exit 1
             fi
@@ -190,7 +190,7 @@ jobs:
 
             echo "→ Running health check..."
             for i in $(seq 1 10); do
-              if curl -sf http://localhost:8082/health > /dev/null; then
+              if curl -sf http://localhost:3000/health > /dev/null; then
                 echo "✓ Health check passed — deploy successful"
                 rm -f "$APP_DIR/server.bak"
                 SUCCESS=true
@@ -202,7 +202,7 @@ jobs:
 
             if [ "$SUCCESS" = false ]; then
               echo "✗ Health check failed — rolling back"
-              cp "$APP_DIR/server.bak" "$APP_DIR/server" || true
+              mv "$APP_DIR/server.bak" "$APP_DIR/server" || true
               sudo systemctl restart basktre-api-gateway
               exit 1
             fi
