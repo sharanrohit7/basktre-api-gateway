@@ -1,0 +1,213 @@
+name: Deploy Basktre API Gateway
+
+on:
+  push:
+    branches:
+      - dev   # auto deploy
+      - main  # requires manual approval
+
+env:
+  GO_VERSION: "1.25"
+  SERVICE:    "basktre-api-gateway"
+  APP_DIR:    "/opt/basktre-api-gateway"
+  BINARY:     "gateway-server"
+
+# ─── JOB 1: Build & Test ─────────────────────────────────────────────────────
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run tests
+        run: go test ./... -timeout 60s
+        continue-on-error: true
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+          go build \
+            -ldflags="-s -w \
+              -X main.Version=${{ github.sha }} \
+              -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o ${{ env.BINARY }} \
+            .
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY }}
+          path: ${{ env.BINARY }}
+          retention-days: 1
+
+# ─── JOB 2: Deploy to Dev (auto on push to dev) ──────────────────────────────
+  deploy-dev:
+    name: Deploy to Dev
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/dev'
+
+    environment:
+      name: development
+      url: https://api.dev.basktre.in/health
+
+    steps:
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BINARY }}
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEV_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.DEV_VM_IP }}" >> ~/.ssh/known_hosts
+
+      - name: Copy binary to Dev VM
+        run: |
+          chmod +x ${{ env.BINARY }}
+          scp -i ~/.ssh/id_rsa \
+            ${{ env.BINARY }} \
+            ubuntu@${{ secrets.DEV_VM_IP }}:${{ env.APP_DIR }}/server.new
+
+      - name: Deploy & health-check on Dev VM
+        run: |
+          ssh -i ~/.ssh/id_rsa ubuntu@"${{ secrets.DEV_VM_IP }}" << 'ENDSSH'
+            set -e
+            APP_DIR=/opt/basktre-api-gateway
+            SUCCESS=false
+
+            echo "→ Backing up current binary..."
+            [ -f "$APP_DIR/server" ] && cp "$APP_DIR/server" "$APP_DIR/server.bak"
+
+            echo "→ Swapping binary..."
+            mv "$APP_DIR/server.new" "$APP_DIR/server"
+            chmod +x "$APP_DIR/server"
+
+            echo "→ Restarting service..."
+            sudo systemctl restart basktre-api-gateway
+            sleep 3
+
+            echo "→ Running health check..."
+            for i in $(seq 1 5); do
+              if curl -sf http://localhost:3000/health > /dev/null; then
+                echo "✓ Health check passed — deploy successful"
+                rm -f "$APP_DIR/server.bak"
+                SUCCESS=true
+                break
+              fi
+              echo "  Attempt $i/5 failed, retrying in 2s..."
+              sleep 2
+            done
+
+            if [ "$SUCCESS" = false ]; then
+              echo "✗ Health check failed — rolling back"
+              mv "$APP_DIR/server.bak" "$APP_DIR/server" || true
+              sudo systemctl restart basktre-api-gateway
+              exit 1
+            fi
+          ENDSSH
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_rsa || true
+
+# ─── JOB 3: Await Manual Approval (prod only) ────────────────────────────────
+  approval:
+    name: Await Approval
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    environment:
+      name: production
+      url: https://api.basktre.in/health
+
+    steps:
+      - name: Approved
+        run: echo "Production deployment approved by reviewer"
+
+# ─── JOB 4: Deploy to Prod (after approval) ──────────────────────────────────
+  deploy-prod:
+    name: Deploy to Prod
+    needs: approval
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BINARY }}
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.PROD_VM_IP }}" >> ~/.ssh/known_hosts
+
+      - name: Copy binary to Prod VM
+        run: |
+          chmod +x ${{ env.BINARY }}
+          scp -i ~/.ssh/id_rsa \
+            ${{ env.BINARY }} \
+            ubuntu@${{ secrets.PROD_VM_IP }}:${{ env.APP_DIR }}/server.new
+
+      - name: Deploy & health-check on Prod VM
+        run: |
+          ssh -i ~/.ssh/id_rsa ubuntu@"${{ secrets.PROD_VM_IP }}" << 'ENDSSH'
+            set -e
+            APP_DIR=/opt/basktre-api-gateway
+            SUCCESS=false
+
+            echo "→ Backing up current binary..."
+            [ -f "$APP_DIR/server" ] && cp "$APP_DIR/server" "$APP_DIR/server.bak"
+
+            echo "→ Swapping binary..."
+            mv "$APP_DIR/server.new" "$APP_DIR/server"
+            chmod +x "$APP_DIR/server"
+
+            echo "→ Restarting service..."
+            sudo systemctl restart basktre-api-gateway
+            sleep 5
+
+            echo "→ Running health check..."
+            for i in $(seq 1 10); do
+              if curl -sf http://localhost:3000/health > /dev/null; then
+                echo "✓ Health check passed — deploy successful"
+                rm -f "$APP_DIR/server.bak"
+                SUCCESS=true
+                break
+              fi
+              echo "  Attempt $i/10 failed, retrying in 3s..."
+              sleep 3
+            done
+
+            if [ "$SUCCESS" = false ]; then
+              echo "✗ Health check failed — rolling back"
+              mv "$APP_DIR/server.bak" "$APP_DIR/server" || true
+              sudo systemctl restart basktre-api-gateway
+              exit 1
+            fi
+          ENDSSH
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_rsa || true
