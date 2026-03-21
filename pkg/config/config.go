@@ -22,20 +22,68 @@ type Config struct {
 func Init(filePath string) error {
 	var initErr error
 	once.Do(func() {
+		// Load .env file if it exists (local development)
 		_ = godotenv.Load()
-		b, err := os.ReadFile(filePath)
+
+		baseData, err := loadFile(filePath)
 		if err != nil {
-			initErr = fmt.Errorf("config: failed to read file %s: %w", filePath, err)
+			initErr = err
 			return
 		}
-		var raw map[string]interface{}
-		if err := yaml.Unmarshal(b, &raw); err != nil {
-			initErr = fmt.Errorf("config: failed to parse YAML: %w", err)
-			return
+
+		// Look for .local version (e.g., config.yaml -> config.local.yaml)
+		localPath := getLocalPath(filePath)
+		if _, err := os.Stat(localPath); err == nil {
+			localData, err := loadFile(localPath)
+			if err == nil {
+				mergeMaps(baseData, localData)
+			}
 		}
-		instance = &Config{data: raw}
+
+		instance = &Config{data: baseData}
 	})
 	return initErr
+}
+
+func loadFile(path string) (map[string]interface{}, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("config: failed to read file %s: %w", path, err)
+	}
+
+	data := make(map[string]interface{})
+	if err := yaml.Unmarshal(b, &data); err != nil {
+		return nil, fmt.Errorf("config: failed to parse YAML %s: %w", path, err)
+	}
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+	return data, nil
+}
+
+func getLocalPath(path string) string {
+	if len(path) > 5 && path[len(path)-5:] == ".yaml" {
+		return path[:len(path)-5] + ".local.yaml"
+	}
+	return path + ".local"
+}
+
+func mergeMaps(base, override map[string]interface{}) {
+	for k, v := range override {
+		if v == nil {
+			delete(base, k)
+			continue
+		}
+		if baseVal, ok := base[k]; ok {
+			if baseMap, ok1 := baseVal.(map[string]interface{}); ok1 {
+				if overrideMap, ok2 := v.(map[string]interface{}); ok2 {
+					mergeMaps(baseMap, overrideMap)
+					continue
+				}
+			}
+		}
+		base[k] = v
+	}
 }
 
 func MustInit(filePath string) {
@@ -45,6 +93,9 @@ func MustInit(filePath string) {
 }
 
 func (c *Config) lookup(key string) (interface{}, bool) {
+	if c == nil || c.data == nil {
+		return nil, false
+	}
 	curr := c.data
 	parts := strings.Split(key, ".")
 	for idx, part := range parts {
