@@ -18,6 +18,12 @@ func PublicRoutes(engine *gin.Engine) {
 			models.POST("/tokens/estimate", fwd.Handler())
 		}
 
+		// Publicly accessible via Google Auth for dashboard integration
+		dashboardModels := api.Group("/models", middlewares.GoogleAuthMiddleware())
+		{
+			dashboardModels.GET("/list", fwd.Handler())
+		}
+
 		providers := api.Group("/providers")
 		{
 			providers.GET("", fwd.Handler())
@@ -31,12 +37,31 @@ func PublicRoutes(engine *gin.Engine) {
 		workspaces := api.Group("/workspace", middlewares.GoogleAuthMiddleware())
 		{
 			workspaces.POST("", fwd.WorkspaceCreateHandler())
+			workspaces.GET("/user/:user_id", fwd.Handler())
+			workspaces.PUT("/:id", fwd.Handler())
+			workspaces.DELETE("/:id", fwd.Handler())
+
 			workspaces.POST("/:id/api-key", fwd.Handler())
+			workspaces.GET("/:id/api-key", fwd.Handler())
+			workspaces.PUT("/:id/api-key/:key_id", fwd.Handler())
+			workspaces.DELETE("/:id/api-key/:key_id", fwd.Handler())
+		}
+
+		wallet := api.Group("/wallet", middlewares.GoogleAuthMiddleware())
+		{
+			wallet.GET("/:workspace_id", fwd.Handler())
 		}
 
 		waitlist := api.Group("/waitlist")
 		{
 			waitlist.POST("", fwd.Handler())
+		}
+
+		dashboard := api.Group("/dashboard", middlewares.GoogleAuthMiddleware())
+		{
+			dashboard.GET("/workspace/:id/usage", fwd.Handler())
+			dashboard.GET("/workspace/:id/usage/daily", fwd.Handler())
+			dashboard.GET("/workspace/:id/transactions", fwd.Handler())
 		}
 	}
 }
