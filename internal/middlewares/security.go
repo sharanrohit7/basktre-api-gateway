@@ -2,6 +2,7 @@ package middlewares
 
 import (
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/basktre/api-gateway/pkg/config"
@@ -11,23 +12,35 @@ import (
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		allowedOrigins := config.GetStringSlice("server.security.cors.allowedOrigins")
-		if len(allowedOrigins) == 0 {
-			allowedOrigins = []string{"*"}
+		if configured := strings.TrimSpace(os.Getenv("CORS_ALLOWED_ORIGINS")); configured != "" {
+			allowedOrigins = strings.Split(configured, ",")
 		}
-		origin := c.Request.Header.Get("Origin")
-		allowOrigin := "*"
-		if origin != "" {
-			for _, o := range allowedOrigins {
-				if o == "*" || o == origin {
-					allowOrigin = origin
-					break
-				}
+
+		origin := strings.TrimSpace(c.Request.Header.Get("Origin"))
+		if origin == "" {
+			c.Next()
+			return
+		}
+
+		allowed := false
+		for _, configuredOrigin := range allowedOrigins {
+			configuredOrigin = strings.TrimSpace(configuredOrigin)
+			if configuredOrigin == "*" || configuredOrigin == origin {
+				allowed = true
+				break
 			}
 		}
-		c.Writer.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+		if !allowed {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "origin is not allowed"})
+			return
+		}
+
+		c.Writer.Header().Add("Vary", "Origin")
+		c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Request-ID")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CSRF-Token, X-Requested-With, X-Request-ID")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Max-Age", "600")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)
 			return

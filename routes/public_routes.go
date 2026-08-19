@@ -29,9 +29,9 @@ func PublicRoutes(engine *gin.Engine) {
 			providers.GET("", fwd.Handler())
 		}
 
-		auth := api.Group("/auth")
+		auth := api.Group("/auth", middlewares.GoogleAuthMiddleware())
 		{
-			auth.POST("/google-login", fwd.Handler())
+			auth.POST("/google-login", fwd.GoogleLoginHandler())
 		}
 
 		workspaces := api.Group("/workspace", middlewares.GoogleAuthMiddleware())
@@ -45,6 +45,10 @@ func PublicRoutes(engine *gin.Engine) {
 			workspaces.GET("/:id/api-key", fwd.Handler())
 			workspaces.PUT("/:id/api-key/:key_id", fwd.Handler())
 			workspaces.DELETE("/:id/api-key/:key_id", fwd.Handler())
+
+			workspaces.PUT("/:id/byok/credentials/:provider", fwd.BYOKHandler())
+			workspaces.GET("/:id/byok/credentials", fwd.BYOKHandler())
+			workspaces.DELETE("/:id/byok/credentials/:provider", fwd.BYOKHandler())
 		}
 
 		wallet := api.Group("/wallet", middlewares.GoogleAuthMiddleware())

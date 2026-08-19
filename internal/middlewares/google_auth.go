@@ -15,6 +15,12 @@ const (
 	HeaderUserName  = "X-User-Name"
 )
 
+type googleIdentity struct {
+	email string
+	sub   string
+	name  string
+}
+
 func GoogleAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
@@ -39,24 +45,41 @@ func GoogleAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		if payload.Issuer != "accounts.google.com" && payload.Issuer != "https://accounts.google.com" {
-			brerr.RespondError(c, brerr.New(brerr.ErrUnauthorized, "invalid token issuer"))
+		identity, appErr := identityFromGooglePayload(payload)
+		if appErr.Code != "" {
+			brerr.RespondError(c, appErr)
 			c.Abort()
 			return
 		}
 
-		email, _ := payload.Claims["email"].(string)
-		sub, _ := payload.Claims["sub"].(string)
-		name, _ := payload.Claims["name"].(string)
-		if sub == "" {
-			brerr.RespondError(c, brerr.New(brerr.ErrUnauthorized, "invalid token subject"))
-			c.Abort()
-			return
-		}
-
-		c.Set("forward_user_email", email)
-		c.Set("forward_user_sub", sub)
-		c.Set("forward_user_name", name)
+		c.Set("forward_user_email", identity.email)
+		c.Set("forward_user_sub", identity.sub)
+		c.Set("forward_user_name", identity.name)
 		c.Next()
 	}
+}
+
+func identityFromGooglePayload(payload *idtoken.Payload) (googleIdentity, brerr.AppError) {
+	if payload == nil {
+		return googleIdentity{}, brerr.New(brerr.ErrUnauthorized, "invalid Google token payload")
+	}
+	if payload.Issuer != "accounts.google.com" && payload.Issuer != "https://accounts.google.com" {
+		return googleIdentity{}, brerr.New(brerr.ErrUnauthorized, "invalid token issuer")
+	}
+
+	email, _ := payload.Claims["email"].(string)
+	emailVerified, _ := payload.Claims["email_verified"].(bool)
+	sub := payload.Subject
+	if sub == "" {
+		sub, _ = payload.Claims["sub"].(string)
+	}
+	name, _ := payload.Claims["name"].(string)
+	if sub == "" {
+		return googleIdentity{}, brerr.New(brerr.ErrUnauthorized, "invalid token subject")
+	}
+	if email == "" || !emailVerified {
+		return googleIdentity{}, brerr.New(brerr.ErrUnauthorized, "google account email is missing or unverified")
+	}
+
+	return googleIdentity{email: email, sub: sub, name: name}, brerr.AppError{}
 }

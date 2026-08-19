@@ -5,6 +5,7 @@ server:
     rateLimit:
       qps: 100
     cors:
+      # Production may override this list with comma-separated CORS_ALLOWED_ORIGINS.
       allowedOrigins:
         - "http://localhost:3000"
         - "http://127.0.0.1:3000"

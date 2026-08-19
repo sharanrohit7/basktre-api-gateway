@@ -3,6 +3,7 @@ package middlewares
 import (
 	"bytes"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/basktre/api-gateway/pkg/logger"
@@ -36,7 +37,7 @@ func RequestLoggerMiddleware() gin.HandlerFunc {
 		}
 
 		logger.InfofWithContext(ctx, "[API Incoming] %s %s", c.Request.Method, path)
-		if len(requestBody) > 0 {
+		if len(requestBody) > 0 && !strings.Contains(c.Request.URL.Path, "/byok/credentials/") {
 			logger.InfofWithContext(ctx, "[API Request Payload] %s", string(requestBody))
 		}
 
