@@ -1,17 +1,21 @@
 package proxy
 
 import (
-	"bytes"
-	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
-	"strconv"
+	"os"
 	"strings"
 
 	brconfig "github.com/basktre/api-gateway/pkg/config"
 	brerr "github.com/basktre/api-gateway/pkg/errors"
 	"github.com/basktre/api-gateway/pkg/requestid"
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	gatewaySecretEnv    = "GATEWAY_INTERNAL_SECRET"
+	gatewaySecretHeader = "X-Basktre-Gateway-Secret"
 )
 
 type Forwarder struct {
@@ -30,7 +34,18 @@ func (f *Forwarder) WorkspaceCreateHandler() gin.HandlerFunc {
 	return f.handler(true)
 }
 
-func (f *Forwarder) handler(enrichWorkspaceCreate bool) gin.HandlerFunc {
+// GoogleLoginHandler forwards only identities verified by GoogleAuthMiddleware
+// and authenticates the gateway itself to the router.
+func (f *Forwarder) GoogleLoginHandler() gin.HandlerFunc {
+	return f.handler(true)
+}
+
+// BYOKHandler authenticates the gateway to the router for sensitive credential operations.
+func (f *Forwarder) BYOKHandler() gin.HandlerFunc {
+	return f.handler(true)
+}
+
+func (f *Forwarder) handler(authenticateGateway bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		baseURL := strings.TrimSuffix(brconfig.GetString("DOWNSTREAM_BASE_URL"), "/")
 		if baseURL == "" {
@@ -46,13 +61,7 @@ func (f *Forwarder) handler(enrichWorkspaceCreate bool) gin.HandlerFunc {
 			targetURL += "?" + raw
 		}
 
-		bodyReader, err := buildDownstreamBody(c, enrichWorkspaceCreate)
-		if err != nil {
-			brerr.RespondError(c, brerr.Wrap(brerr.ErrBadRequest, "invalid request body", err))
-			return
-		}
-
-		req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, targetURL, bodyReader)
+		req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, targetURL, c.Request.Body)
 		if err != nil {
 			brerr.RespondError(c, brerr.Wrap(brerr.ErrInternalServer, "failed to build downstream request", err))
 			return
@@ -60,6 +69,12 @@ func (f *Forwarder) handler(enrichWorkspaceCreate bool) gin.HandlerFunc {
 
 		req.Header = c.Request.Header.Clone()
 		req.Header.Del("Authorization")
+		if authenticateGateway {
+			if err := attachGatewayAuthentication(req); err != nil {
+				brerr.RespondError(c, brerr.Wrap(brerr.ErrInternalServer, "gateway authentication is not configured", err))
+				return
+			}
+		}
 		req.Header.Set(requestid.HeaderXRequestID, requestid.GetRequestID(c.Request.Context()))
 
 		if v, ok := c.Get("forward_user_email"); ok {
@@ -80,6 +95,9 @@ func (f *Forwarder) handler(enrichWorkspaceCreate bool) gin.HandlerFunc {
 		defer resp.Body.Close()
 
 		for k, values := range resp.Header {
+			if isDownstreamCORSHeader(k) {
+				continue
+			}
 			for _, v := range values {
 				c.Writer.Header().Add(k, v)
 			}
@@ -89,45 +107,15 @@ func (f *Forwarder) handler(enrichWorkspaceCreate bool) gin.HandlerFunc {
 	}
 }
 
-func buildDownstreamBody(c *gin.Context, enrichWorkspaceCreate bool) (io.Reader, error) {
-	if !enrichWorkspaceCreate {
-		return c.Request.Body, nil
-	}
+func isDownstreamCORSHeader(name string) bool {
+	return strings.HasPrefix(strings.ToLower(name), "access-control-")
+}
 
-	raw, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		return nil, err
+func attachGatewayAuthentication(req *http.Request) error {
+	secret := strings.TrimSpace(os.Getenv(gatewaySecretEnv))
+	if secret == "" {
+		return errors.New("GATEWAY_INTERNAL_SECRET is empty")
 	}
-	defer c.Request.Body.Close()
-
-	body := map[string]interface{}{}
-	if len(bytes.TrimSpace(raw)) > 0 {
-		if err := json.Unmarshal(raw, &body); err != nil {
-			return nil, err
-		}
-	}
-
-	if email, ok := c.Get("forward_user_email"); ok {
-		if v, ok := email.(string); ok && v != "" {
-			body["email"] = v
-		}
-	}
-	if name, ok := c.Get("forward_user_name"); ok {
-		if v, ok := name.(string); ok && v != "" {
-			body["user_name"] = v
-		}
-	}
-	if sub, ok := c.Get("forward_user_sub"); ok {
-		if v, ok := sub.(string); ok && v != "" {
-			body["google_id"] = v
-		}
-	}
-
-	merged, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	c.Request.Header.Set("Content-Type", "application/json")
-	c.Request.Header.Set("Content-Length", strconv.Itoa(len(merged)))
-	return bytes.NewReader(merged), nil
+	req.Header.Set(gatewaySecretHeader, secret)
+	return nil
 }
